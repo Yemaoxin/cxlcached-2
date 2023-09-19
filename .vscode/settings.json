@@ -1,0 +1,6 @@
+{
+    "files.associations": {
+        "cc_mm.h": "c",
+        "cxl_slab.h": "c"
+    }
+}

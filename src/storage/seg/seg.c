@@ -23,23 +23,23 @@
 
 #define SEG_MODULE_NAME "storage::seg"
 
-extern struct setting        setting;
+extern struct setting setting;
 extern struct seg_evict_info evict_info;
-extern char                  *eviction_policy_names[];
+extern char *eviction_policy_names[];
 
 struct seg_heapinfo heap; /* info of all allocated segs */
-struct ttl_bucket   ttl_buckets[MAX_N_TTL_BUCKET];
+struct ttl_bucket ttl_buckets[MAX_N_TTL_BUCKET];
 
-static bool           seg_initialized = false;
-seg_metrics_st        *seg_metrics    = NULL;
-seg_options_st        *seg_options    = NULL;
+static bool seg_initialized = false;
+seg_metrics_st *seg_metrics = NULL;
+seg_options_st *seg_options = NULL;
 seg_perttl_metrics_st perttl[MAX_N_TTL_BUCKET];
 
-proc_time_i   flush_at = -1;
+proc_time_i flush_at = -1;
 bool use_cas = false;
-pthread_t     bg_tid;
-int           n_thread = 1;
-volatile bool stop     = false;
+pthread_t bg_tid;
+int n_thread = 1;
+volatile bool stop = false;
 
 static char *seg_state_change_str[] = {
     "allocation",
@@ -50,21 +50,24 @@ static char *seg_state_change_str[] = {
     "invalid_reason",
 };
 
-void
-dump_seg_info(void)
+void dump_seg_info(void)
 {
     struct seg *seg;
-    int32_t    seg_id;
+    int32_t seg_id;
 
-    for (int32_t i = 0; i < MAX_N_TTL_BUCKET; i++) {
+    for (int32_t i = 0; i < MAX_N_TTL_BUCKET; i++)
+    {
         seg_id = ttl_buckets[i].first_seg_id;
-        if (seg_id != -1) {
+        if (seg_id != -1)
+        {
             printf("ttl bucket %4d: ", i);
         }
-        else {
+        else
+        {
             continue;
         }
-        while (seg_id != -1) {
+        while (seg_id != -1)
+        {
             seg = &heap.segs[seg_id];
             printf("seg %d (%d), ", seg_id, seg_evictable(seg));
             seg_id = seg->next_seg_id;
@@ -72,10 +75,11 @@ dump_seg_info(void)
         printf("\n");
     }
 
-    char         s[64];
-    for (int32_t j = 0; j < heap.max_nseg; j++) {
+    char s[64];
+    for (int32_t j = 0; j < heap.max_nseg; j++)
+    {
         snprintf(s, 64, "seg %4d evictable %d", j,
-            seg_evictable(&heap.segs[j]));
+                 seg_evictable(&heap.segs[j]));
         SEG_PRINT(j, s, log_warn);
     }
 }
@@ -83,37 +87,40 @@ dump_seg_info(void)
 /**
  * wait until no other threads are accessing the seg (refcount == 0)
  */
-void
-seg_wait_refcnt(int32_t seg_id)
+void seg_wait_refcnt(int32_t seg_id)
 {
-    struct seg *seg          = &heap.segs[seg_id];
+    struct seg *seg = &heap.segs[seg_id];
     ASSERT(seg->accessible != 1);
-    bool       r_log_printed = false, w_log_printed = false;
-    int        r_ref, w_ref;
+    bool r_log_printed = false, w_log_printed = false;
+    int r_ref, w_ref;
 
     w_ref = __atomic_load_n(&(seg->w_refcount), __ATOMIC_RELAXED);
     r_ref = __atomic_load_n(&(seg->r_refcount), __ATOMIC_RELAXED);
 
-    if (w_ref) {
+    if (w_ref)
+    {
         log_verb("wait for seg %d refcount, current read refcount "
                  "%d, write refcount %d",
-            seg_id, r_ref, w_ref);
+                 seg_id, r_ref, w_ref);
         w_log_printed = true;
     }
 
-    while (w_ref) {
+    while (w_ref)
+    {
         sched_yield();
         w_ref = __atomic_load_n(&(seg->w_refcount), __ATOMIC_RELAXED);
     }
 
-    if (r_ref) {
+    if (r_ref)
+    {
         log_verb("wait for seg %d refcount, current read refcount "
                  "%d, write refcount %d",
-            seg_id, r_ref, w_ref);
+                 seg_id, r_ref, w_ref);
         r_log_printed = true;
     }
 
-    while (r_ref) {
+    while (r_ref)
+    {
         sched_yield();
         r_ref = __atomic_load_n(&(seg->r_refcount), __ATOMIC_RELAXED);
     }
@@ -125,33 +132,31 @@ seg_wait_refcnt(int32_t seg_id)
 /**
  * check whether seg is accessible
  */
-bool
-seg_is_accessible(int32_t seg_id)
+bool seg_is_accessible(int32_t seg_id)
 {
     struct seg *seg = &heap.segs[seg_id];
-    if (__atomic_load_n(&seg->accessible, __ATOMIC_RELAXED) == 0) {
+    if (__atomic_load_n(&seg->accessible, __ATOMIC_RELAXED) == 0)
+    {
         return false;
     }
 
-    return seg->ttl + seg->create_at > time_proc_sec()
-        && seg->create_at > flush_at;
+    return seg->ttl + seg->create_at > time_proc_sec() && seg->create_at > flush_at;
 }
 
-bool
-seg_w_ref(int32_t seg_id)
+bool seg_w_ref(int32_t seg_id)
 {
     struct seg *seg = &heap.segs[seg_id];
 
-    if (seg_is_accessible(seg_id)) {
+    if (seg_is_accessible(seg_id))
+    {
         __atomic_fetch_add(&seg->w_refcount, 1, __ATOMIC_RELAXED);
         return true;
     }
 
     return false;
 }
-
-void
-seg_w_deref(int32_t seg_id)
+// add by yemaoxin,2023-09-18 20:10:52 seg的统计下降，实用atomic
+void seg_w_deref(int32_t seg_id)
 {
     struct seg *seg = &heap.segs[seg_id];
 
@@ -171,15 +176,15 @@ seg_w_deref(int32_t seg_id)
  * in order to avoid eviction algorithm picking this seg,
  * we do not clear seg->locked until it is linked into ttl_bucket
  */
-void
-seg_init(int32_t seg_id)
+void seg_init(int32_t seg_id)
 {
     ASSERT(seg_id != -1);
     struct seg *seg = &heap.segs[seg_id];
 
 #if defined DEBUG_MODE
     seg->seg_id_non_decr += heap.max_nseg;
-    if (seg->seg_id_non_decr > 1ul << 23ul) {
+    if (seg->seg_id_non_decr > 1ul << 23ul)
+    {
         seg->seg_id_non_decr = seg->seg_id % heap.max_nseg;
     }
     seg->n_rm_item = 0;
@@ -191,16 +196,16 @@ seg_init(int32_t seg_id)
     ASSERT(seg->accessible == 0);
     ASSERT(seg->evictable == 0);
 
-//    cc_memset(data_start, 0, heap.seg_size);
+    //    cc_memset(data_start, 0, heap.seg_size);
 
 #if defined CC_ASSERT_PANIC || defined CC_ASSERT_LOG
-    *(uint64_t *) (data_start) = SEG_MAGIC;
+    *(uint64_t *)(data_start) = SEG_MAGIC;
     seg->write_offset = 8;
-    seg->live_bytes   = 8;
-    seg->total_bytes  = 8;
+    seg->live_bytes = 8;
+    seg->total_bytes = 8;
 #else
-    seg->write_offset   = 0;
-    seg->live_bytes  = 0;
+    seg->write_offset = 0;
+    seg->live_bytes = 0;
 #endif
 
     seg->prev_seg_id = -1;
@@ -210,19 +215,18 @@ seg_init(int32_t seg_id)
     seg->n_total_item = 0;
 
     seg->create_at = time_proc_sec();
-    seg->merge_at  = 0;
+    seg->merge_at = 0;
 
     seg->accessible = 1;
 
-    seg->n_hit         = 0;
-    seg->n_active      = 0;
+    seg->n_hit = 0;
+    seg->n_active = 0;
     seg->n_active_byte = 0;
 }
 
-void
-rm_seg_from_ttl_bucket(int32_t seg_id)
+void rm_seg_from_ttl_bucket(int32_t seg_id)
 {
-    struct seg        *seg        = &heap.segs[seg_id];
+    struct seg *seg = &heap.segs[seg_id];
     struct ttl_bucket *ttl_bucket = &ttl_buckets[find_ttl_bucket_idx(seg->ttl)];
     ASSERT(seg->ttl == ttl_bucket->ttl);
 
@@ -233,21 +237,25 @@ rm_seg_from_ttl_bucket(int32_t seg_id)
     int32_t prev_seg_id = seg->prev_seg_id;
     int32_t next_seg_id = seg->next_seg_id;
 
-    if (prev_seg_id == -1) {
+    if (prev_seg_id == -1)
+    {
         ASSERT(ttl_bucket->first_seg_id == seg_id);
 
         ttl_bucket->first_seg_id = next_seg_id;
     }
-    else {
+    else
+    {
         heap.segs[prev_seg_id].next_seg_id = next_seg_id;
     }
 
-    if (next_seg_id == -1) {
+    if (next_seg_id == -1)
+    {
         ASSERT(ttl_bucket->last_seg_id == seg_id);
 
         ttl_bucket->last_seg_id = prev_seg_id;
     }
-    else {
+    else
+    {
         heap.segs[next_seg_id].prev_seg_id = prev_seg_id;
     }
 
@@ -255,9 +263,10 @@ rm_seg_from_ttl_bucket(int32_t seg_id)
     ASSERT(ttl_bucket->n_seg >= 0);
 
     log_verb("remove seg %d from ttl bucket, after removal, first seg %d,"
-             "last %d, prev %d, next %d", seg_id,
-        ttl_bucket->first_seg_id, ttl_bucket->last_seg_id,
-        seg->prev_seg_id, seg->next_seg_id);
+             "last %d, prev %d, next %d",
+             seg_id,
+             ttl_bucket->first_seg_id, ttl_bucket->last_seg_id,
+             seg->prev_seg_id, seg->next_seg_id);
 }
 
 /**
@@ -277,19 +286,20 @@ rm_seg_from_ttl_bucket(int32_t seg_id)
  * return true if current thread is able to grab the lock, otherwise false
  */
 /* TODO(jason): separate into two func: one lock for remove, one remove */
-bool
-rm_all_item_on_seg(int32_t seg_id, enum seg_state_change reason)
+bool rm_all_item_on_seg(int32_t seg_id, enum seg_state_change reason)
 {
     ASSERT(seg_id >= 0);
 
-    struct seg  *seg = &heap.segs[seg_id];
+    struct seg *seg = &heap.segs[seg_id];
     struct item *it;
 
     /* prevent being picked by eviction algorithm concurrently */
-    if (__atomic_exchange_n(&seg->evictable, 0, __ATOMIC_RELAXED) == 0) {
+    if (__atomic_exchange_n(&seg->evictable, 0, __ATOMIC_RELAXED) == 0)
+    {
         /* this seg is either expiring or being evicted by other threads */
 
-        if (reason == SEG_EXPIRATION) {
+        if (reason == SEG_EXPIRATION)
+        {
             SEG_PRINT(seg_id, "expiring unevictable seg", log_warn);
 
             INCR(seg_metrics, seg_evict_ex);
@@ -314,23 +324,24 @@ rm_all_item_on_seg(int32_t seg_id, enum seg_state_change reason)
      * threads, so we can check again safely
      */
     if (seg->next_seg_id == -1 &&
-        reason != SEG_EXPIRATION && reason != SEG_FORCE_EVICTION) {
+        reason != SEG_EXPIRATION && reason != SEG_FORCE_EVICTION)
+    {
         /* "this should not happen" */
         ASSERT(0);
-//        __atomic_store_n(&seg->evictable, 0, __ATOMIC_SEQ_CST);
-//        INCR(seg_metrics, seg_evict_ex);
+        //        __atomic_store_n(&seg->evictable, 0, __ATOMIC_SEQ_CST);
+        //        INCR(seg_metrics, seg_evict_ex);
 
         return false;
     }
 
-    uint8_t  *seg_data = get_seg_data_start(seg_id);
-    uint8_t  *curr     = seg_data;
-    uint32_t offset    = MIN(seg->write_offset, heap.seg_size) - ITEM_HDR_SIZE;
+    uint8_t *seg_data = get_seg_data_start(seg_id);
+    uint8_t *curr = seg_data;
+    uint32_t offset = MIN(seg->write_offset, heap.seg_size) - ITEM_HDR_SIZE;
 
     SEG_PRINT(seg_id, seg_state_change_str[reason], log_debug);
 
 #if defined CC_ASSERT_PANIC || defined CC_ASSERT_LOG
-    ASSERT(*(uint64_t *) (curr) == SEG_MAGIC);
+    ASSERT(*(uint64_t *)(curr) == SEG_MAGIC);
     curr += sizeof(uint64_t);
 #endif
 
@@ -339,17 +350,20 @@ rm_all_item_on_seg(int32_t seg_id, enum seg_state_change reason)
     rm_seg_from_ttl_bucket(seg_id);
     pthread_mutex_unlock(&heap.mtx);
 
-    while (curr - seg_data < offset) {
+    while (curr - seg_data < offset)
+    {
         /* check both offset and n_live_item is because when a segment is expiring
          * and have a slow writer on it, we could observe n_live_item == 0,
          * but we haven't reached offset */
-        it = (struct item *) curr;
-        if (seg->n_live_item == 0) {
+        it = (struct item *)curr;
+        if (seg->n_live_item == 0)
+        {
             ASSERT(seg->live_bytes == 0 || seg->live_bytes == 8);
 
             break;
         }
-        if (it->klen == 0 && it->vlen == 0) {
+        if (it->klen == 0 && it->vlen == 0)
+        {
 #if defined(CC_ASSERT_PANIC) && defined(DEBUG_MODE)
             scan_hashtable_find_seg(seg->seg_id_non_decr);
 #endif
@@ -366,7 +380,7 @@ rm_all_item_on_seg(int32_t seg_id, enum seg_state_change reason)
 
 #if defined DEBUG_MODE
         hashtable_evict(item_key(it), it->klen, seg->seg_id_non_decr,
-            curr - seg_data);
+                        curr - seg_data);
 #else
         hashtable_evict(item_key(it), it->klen, seg->seg_id, curr - seg_data);
 #endif
@@ -380,7 +394,7 @@ rm_all_item_on_seg(int32_t seg_id, enum seg_state_change reason)
     /* at this point, seg->n_live_item could be negative
      * if it is an expired segment and a new item is being wriiten very slowly,
      * and not inserted into hash table */
-//    ASSERT(__atomic_load_n(&seg->n_live_item, __ATOMIC_ACQUIRE) >= 0);
+    //    ASSERT(__atomic_load_n(&seg->n_live_item, __ATOMIC_ACQUIRE) >= 0);
 
     /* all operation up till here does not require refcount to be 0
      * because the data on the segment is not cleared yet,
@@ -396,7 +410,8 @@ rm_all_item_on_seg(int32_t seg_id, enum seg_state_change reason)
      * writing (_item_define) and insert after we clear the hashtable entries,
      * so we need to double check, in most cases, this should not happen */
 
-    if (__atomic_load_n(&seg->n_live_item, __ATOMIC_SEQ_CST) > 0) {
+    if (__atomic_load_n(&seg->n_live_item, __ATOMIC_SEQ_CST) > 0)
+    {
         INCR(seg_metrics, seg_evict_retry);
         /* because we don't know which item is newly written, so we
          * have to remove all items again */
@@ -404,11 +419,12 @@ rm_all_item_on_seg(int32_t seg_id, enum seg_state_change reason)
 #if defined CC_ASSERT_PANIC || defined CC_ASSERT_LOG
         curr += sizeof(uint64_t);
 #endif
-        while (curr - seg_data < offset) {
-            it = (struct item *) curr;
+        while (curr - seg_data < offset)
+        {
+            it = (struct item *)curr;
 #if defined DEBUG_MODE
             hashtable_evict(item_key(it), it->klen, seg->seg_id_non_decr,
-                curr - seg_data);
+                            curr - seg_data);
 #else
             hashtable_evict(item_key(it), it->klen, seg->seg_id, curr - seg_data);
 #endif
@@ -417,9 +433,10 @@ rm_all_item_on_seg(int32_t seg_id, enum seg_state_change reason)
     }
 
     /* expensive debug commands */
-    if (seg->n_live_item != 0) {
+    if (seg->n_live_item != 0)
+    {
         log_warn("removed all items from segment, but %d items left",
-            seg->n_live_item);
+                 seg->n_live_item);
 #if defined(CC_ASSERT_PANIC) && defined(DEBUG_MODE)
         scan_hashtable_find_seg(heap.segs[seg_id].seg_id_non_decr);
 #endif
@@ -435,7 +452,8 @@ rstatus_i
 expire_seg(int32_t seg_id)
 {
     bool success = rm_all_item_on_seg(seg_id, SEG_EXPIRATION);
-    if (!success) {
+    if (!success)
+    {
         return CC_ERROR;
     }
 
@@ -464,7 +482,8 @@ seg_get_from_freepool(bool use_reserved)
 
     int status = pthread_mutex_lock(&heap.mtx);
 
-    if (status != 0) {
+    if (status != 0)
+    {
         log_warn("fail to lock seg free pool");
         pthread_mutex_unlock(&heap.mtx);
 
@@ -472,7 +491,8 @@ seg_get_from_freepool(bool use_reserved)
     }
 
     if (heap.n_free_seg == 0 ||
-        (!use_reserved && heap.n_free_seg <= heap.n_reserved_seg)) {
+        (!use_reserved && heap.n_free_seg <= heap.n_reserved_seg))
+    {
         pthread_mutex_unlock(&heap.mtx);
 
         return -1;
@@ -486,7 +506,8 @@ seg_get_from_freepool(bool use_reserved)
 
     next_seg_id = heap.segs[seg_id_ret].next_seg_id;
     heap.free_seg_id = next_seg_id;
-    if (next_seg_id != -1) {
+    if (next_seg_id != -1)
+    {
         heap.segs[next_seg_id].prev_seg_id = -1;
     }
 
@@ -501,15 +522,15 @@ seg_get_from_freepool(bool use_reserved)
  * add evicted/allocated seg to free pool,
  * caller should grab the heap lock before calling this function
  **/
-void
-seg_add_to_freepool(int32_t seg_id, enum seg_state_change reason)
+void seg_add_to_freepool(int32_t seg_id, enum seg_state_change reason)
 {
     ASSERT(pthread_mutex_trylock(&heap.mtx) != 0);
 
     struct seg *seg = &heap.segs[seg_id];
     seg->next_seg_id = heap.free_seg_id;
     seg->prev_seg_id = -1;
-    if (heap.free_seg_id != -1) {
+    if (heap.free_seg_id != -1)
+    {
         ASSERT(heap.segs[heap.free_seg_id].prev_seg_id == -1);
         heap.segs[heap.free_seg_id].prev_seg_id = seg_id;
     }
@@ -523,12 +544,12 @@ seg_add_to_freepool(int32_t seg_id, enum seg_state_change reason)
     /* this is needed to make sure the assert
      * at seg_get_from_freepool do not fail */
     seg->write_offset = 0;
-    seg->live_bytes   = 0;
+    seg->live_bytes = 0;
 
     heap.n_free_seg += 1;
 
     log_vverb("add %s seg %d to free pool, %d free segs",
-        seg_state_change_str[reason], seg_id, heap.n_free_seg);
+              seg_state_change_str[reason], seg_id, heap.n_free_seg);
 }
 
 /**
@@ -542,34 +563,41 @@ seg_get_new(void)
 {
 #define MAX_RETRIES 8
     evict_rstatus_e status;
-    int32_t         seg_id_ret;
+    int32_t seg_id_ret;
     /* eviction may fail if other threads pick the same seg */
-    int             n_retries_left = MAX_RETRIES;
+    int n_retries_left = MAX_RETRIES;
 
     INCR(seg_metrics, seg_get);
 
     seg_id_ret = seg_get_from_freepool(false);
 
-    while (seg_id_ret == -1 && n_retries_left >= 0) {
+    while (seg_id_ret == -1 && n_retries_left >= 0)
+    {
         /* evict seg */
-        if (evict_info.policy == EVICT_MERGE_FIFO) {
+        if (evict_info.policy == EVICT_MERGE_FIFO)
+        {
             status = seg_merge_evict(&seg_id_ret);
-        } else {
+        }
+        else
+        {
             status = seg_evict(&seg_id_ret);
         }
 
-        if (status == EVICT_OK) {
+        if (status == EVICT_OK)
+        {
             break;
         }
 
-        if (--n_retries_left < MAX_RETRIES) {
+        if (--n_retries_left < MAX_RETRIES)
+        {
             log_warn("retry %d", n_retries_left);
 
             INCR(seg_metrics, seg_evict_retry);
         }
     }
 
-    if (seg_id_ret == -1) {
+    if (seg_id_ret == -1)
+    {
         INCR(seg_metrics, seg_get_ex);
         log_error("unable to get new seg from eviction");
 
@@ -584,11 +612,12 @@ seg_get_new(void)
 static void
 heap_init(void)
 {
-    heap.max_nseg  = heap.heap_size / heap.seg_size;
+    heap.max_nseg = heap.heap_size / heap.seg_size;
     heap.heap_size = heap.max_nseg * heap.seg_size;
-    heap.base      = NULL;
+    heap.base = NULL;
 
-    if (!heap.prealloc) {
+    if (!heap.prealloc)
+    {
         log_crit("%s only support prealloc", SEG_MODULE_NAME);
         exit(EX_CONFIG);
     }
@@ -600,16 +629,17 @@ setup_heap_mem(void)
     int datapool_fresh = 1;
 
     heap.pool = datapool_open(heap.poolpath, heap.poolname, heap.heap_size,
-        &datapool_fresh, heap.prefault);
+                              &datapool_fresh, heap.prefault);
 
-    if (heap.pool == NULL || datapool_addr(heap.pool) == NULL) {
+    if (heap.pool == NULL || datapool_addr(heap.pool) == NULL)
+    {
         log_crit("create datapool failed: %s - %zu bytes for %" PRIu32 " segs",
-            strerror(errno), heap.heap_size, heap.max_nseg);
+                 strerror(errno), heap.heap_size, heap.max_nseg);
         exit(EX_CONFIG);
     }
 
     log_info("pre-allocated %zu bytes for %" PRIu32 " segs", heap.heap_size,
-        heap.max_nseg);
+             heap.max_nseg);
 
     heap.base = datapool_addr(heap.pool);
 
@@ -621,7 +651,7 @@ seg_heap_setup(void)
 {
     heap_init();
 
-    int    dram_fresh = 1;
+    int dram_fresh = 1;
     size_t seg_hdr_sz = SEG_HDR_SIZE * heap.max_nseg;
 
     dram_fresh = setup_heap_mem();
@@ -629,20 +659,23 @@ seg_heap_setup(void)
 
     heap.segs = cc_zalloc(seg_hdr_sz);
 
-    if (!dram_fresh) {
+    if (!dram_fresh)
+    {
         /* TODO(jason): recover */
         ;
     }
-    else {
+    else
+    {
         pthread_mutex_lock(&heap.mtx);
         heap.n_free_seg = 0;
-        for (int32_t i = heap.max_nseg - 1; i >= 0; i--) {
-            heap.segs[i].seg_id          = i;
+        for (int32_t i = heap.max_nseg - 1; i >= 0; i--)
+        {
+            heap.segs[i].seg_id = i;
 #ifdef DEBUG_MODE
             heap.segs[i].seg_id_non_decr = i;
 #endif
-            heap.segs[i].evictable       = 0;
-            heap.segs[i].accessible      = 0;
+            heap.segs[i].evictable = 0;
+            heap.segs[i].accessible = 0;
 
             seg_add_to_freepool(i, SEG_ALLOCATION);
         }
@@ -652,8 +685,7 @@ seg_heap_setup(void)
     return CC_OK;
 }
 
-void
-seg_teardown(void)
+void seg_teardown(void)
 {
     log_info("tear down the %s module", SEG_MODULE_NAME);
 
@@ -661,7 +693,8 @@ seg_teardown(void)
 
     pthread_join(bg_tid, NULL);
 
-    if (!seg_initialized) {
+    if (!seg_initialized)
+    {
         log_warn("%s has never been set up", SEG_MODULE_NAME);
         return;
     }
@@ -673,40 +706,41 @@ seg_teardown(void)
 
     seg_metrics = NULL;
 
-    flush_at        = -1;
+    flush_at = -1;
     seg_initialized = false;
 }
-
-void
-seg_setup(seg_options_st *options, seg_metrics_st *metrics)
+// add by yemaoxin,2023-09-19 15:51:22 可以直接在这里设置CXL上的数据存储
+void seg_setup(seg_options_st *options, seg_metrics_st *metrics)
 {
     log_info("set up the %s module", SEG_MODULE_NAME);
 
-    if (seg_initialized) {
+    if (seg_initialized)
+    {
         log_warn("%s has already been set up, re-creating", SEG_MODULE_NAME);
         seg_teardown();
     }
 
     seg_metrics = metrics;
 
-    if (options == NULL) {
+    if (options == NULL)
+    {
         log_crit("no option is provided for seg initialization");
         exit(EX_CONFIG);
     }
 
     flush_at = -1;
-    stop     = false;
+    stop = false;
 
     seg_options = options;
-    n_thread    = option_uint(&seg_options->seg_n_thread);
+    n_thread = option_uint(&seg_options->seg_n_thread);
 
-    heap.seg_size  = option_uint(&seg_options->seg_size);
+    heap.seg_size = option_uint(&seg_options->seg_size);
     heap.heap_size = option_uint(&seg_options->heap_mem);
     log_verb("cache size %" PRIu64, heap.heap_size);
 
     heap.free_seg_id = -1;
-    heap.prealloc    = option_bool(&seg_options->seg_prealloc);
-    heap.prefault    = option_bool(&seg_options->datapool_prefault);
+    heap.prealloc = option_bool(&seg_options->seg_prealloc);
+    heap.prefault = option_bool(&seg_options->datapool_prefault);
 
     heap.poolpath = option_str(&seg_options->datapool_path);
     heap.poolname = option_str(&seg_options->datapool_name);
@@ -714,23 +748,25 @@ seg_setup(seg_options_st *options, seg_metrics_st *metrics)
     heap.n_reserved_seg = 0;
 
     use_cas = option_bool(&seg_options->seg_use_cas);
-
+    // add by yemaoxin,2023-09-19 15:52:47 哈希表的设置
     hashtable_setup(option_uint(&seg_options->hash_power));
 
-    if (seg_heap_setup() != CC_OK) {
+    if (seg_heap_setup() != CC_OK)
+    {
         log_crit("Could not setup seg heap info");
         goto error;
     }
-
+    // add by yemaoxin,2023-09-19 15:53:05 设置ttl bucket
     ttl_bucket_setup();
 
-    evict_info.merge_opt.seg_n_merge     =
+    evict_info.merge_opt.seg_n_merge =
         option_uint(&seg_options->seg_n_merge);
     evict_info.merge_opt.seg_n_max_merge =
         option_uint(&seg_options->seg_n_max_merge);
     segevict_setup(option_uint(&options->seg_evict_opt),
-        option_uint(&seg_options->seg_mature_time));
-    if (evict_info.policy == EVICT_MERGE_FIFO) {
+                   option_uint(&seg_options->seg_mature_time));
+    if (evict_info.policy == EVICT_MERGE_FIFO)
+    {
         heap.n_reserved_seg = n_thread;
     }
 
@@ -739,11 +775,11 @@ seg_setup(seg_options_st *options, seg_metrics_st *metrics)
     seg_initialized = true;
 
     log_info("Seg header size: %d, item header size: %d, eviction algorithm %s",
-        SEG_HDR_SIZE, ITEM_HDR_SIZE, eviction_policy_names[evict_info.policy]);
+             SEG_HDR_SIZE, ITEM_HDR_SIZE, eviction_policy_names[evict_info.policy]);
 
     return;
 
-    error:
+error:
     seg_teardown();
     exit(EX_CONFIG);
 }

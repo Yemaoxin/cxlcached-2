@@ -13,7 +13,7 @@ _item_expired(struct item *it)
 {
     return (it->expire_at < time_proc_sec() || it->create_at <= flush_at);
 }
-
+//add by yemaoxin,2023-09-18 21:14:11 slab机制原有的基于Segmented LRU的item复制
 static inline void
 _copy_key_item(struct item *nit, struct item *oit)
 {

@@ -92,6 +92,7 @@ struct seg {
  * the order of field is optimized for CPU cacheline
  **/
 struct seg_heapinfo {
+    //add by yemaoxin,2023-09-18 18:44:50 实际是seg拉链
     struct seg          *segs;          /* seg headers */
     size_t              seg_size;
 
@@ -100,6 +101,7 @@ struct seg_heapinfo {
     int32_t             max_nseg;       /* max # seg allowed */
     size_t              heap_size;
 
+    //add by yemaoxin,2023-09-18 18:43:58 一个TTL-BUCKET 就是有一个seg链，会有唯一一个空闲seg
     int32_t             free_seg_id;    /* this is the head of free pool */
 
     char                *poolpath;

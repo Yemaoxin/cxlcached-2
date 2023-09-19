@@ -52,13 +52,14 @@ ttl_bucket_reserve_item(int32_t ttl_bucket_idx, size_t sz, int32_t *seg_id)
     if (curr_seg_id != -1) {
         /* increment offset by sz */
         curr_seg   = &heap.segs[curr_seg_id];
+        //add by yemaoxin,2023-09-18 21:34:18 检查是否是被eviction和expiration
         accessible = seg_is_accessible(curr_seg_id);
         if (accessible) {
             offset = __atomic_fetch_add(
                 &(curr_seg->write_offset), sz, __ATOMIC_SEQ_CST);
         }
     }
-
+    //add by yemaoxin,2023-09-18 21:36:39 检查当前的seg的空间是否足够使用
     while (curr_seg_id == -1 || offset + sz > heap.seg_size || (!accessible)) {
         /* we need to get a new segment */
         if (offset + sz > heap.seg_size && offset < heap.seg_size) {
@@ -69,9 +70,10 @@ ttl_bucket_reserve_item(int32_t ttl_bucket_idx, size_t sz, int32_t *seg_id)
             seg_data = get_seg_data_start(curr_seg_id);
             memset(seg_data + offset, 0, heap.seg_size - offset);
         }
-
+        //add by yemaoxin,2023-09-18 21:37:34 分配一个新的seg
         new_seg_id = seg_get_new();
 
+        //add by yemaoxin,2023-09-18 21:37:59 新的设计上避免不存在新的seg
         if (new_seg_id == -1) {
             dump_seg_info();
 #if defined CC_ASSERT_PANIC || defined(CC_ASSERT_LOG)

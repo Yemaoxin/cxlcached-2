@@ -16,7 +16,7 @@ extern volatile proc_time_i flush_at;
 extern pthread_t            bg_tid;
 extern struct ttl_bucket    ttl_buckets[MAX_N_TTL_BUCKET];
 
-
+//add by yemaoxin,2023-09-18 18:40:21    这里是expire
 static void
 check_seg_expire(void)
 {
@@ -67,6 +67,8 @@ background_main(void *data)
     log_info("Segcache background thread started");
 
     while (!stop) {
+
+        // 后台是设置了一个expire，默认没有开eviction
         check_seg_expire();
 
         // do we want to enable background eviction?

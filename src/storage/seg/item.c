@@ -30,8 +30,9 @@ prand(void)
 static struct item *
 _item_alloc(uint32_t sz, int32_t ttl_bucket_idx, int32_t *seg_id)
 {
+    //add by yemaoxin,2023-09-18 21:18:53 从ttl bucket中获取一块item大小，如果分配不到内存了，说明就需要eviction，当DRAM的大小减下来，这个就会频繁了
     struct item *it = ttl_bucket_reserve_item(ttl_bucket_idx, sz, seg_id);
-
+    //add by yemaoxin,2023-09-18 21:20:22  目前对于此处的设计，需要再考虑嘛？是通过时刻保持seg的空余，还是增加到CXL的机制
     if (it == NULL) {
         INCR(seg_metrics, item_alloc_ex);
         log_error("error alloc it %p of size %" PRIu32
@@ -210,7 +211,7 @@ item_release(struct item *it)
 {
     int32_t seg_id = (((uint8_t *)it) - heap.base) / heap.seg_size;
     struct seg *seg = &heap.segs[seg_id];
-
+    //add by yemaoxin,2023-09-18 20:12:46 通过原子操作实现，非常方便
     int16_t ref_cnt = __atomic_sub_fetch(&seg->r_refcount, 1, __ATOMIC_RELAXED);
 
     ASSERT(ref_cnt >= 0);
@@ -355,7 +356,7 @@ item_decr(uint64_t *vint, struct item *it, uint64_t delta)
     return ITEM_OK;
 }
 
-
+//add by yemaoxin,2023-09-18 20:14:26 实际删除过程中segment中没有原地的删除或者更新，但是hashtable中必须删除，标记为删除 
 bool
 item_delete(const struct bstring *key)
 {

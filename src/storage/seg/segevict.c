@@ -11,7 +11,7 @@ struct seg_evict_info evict_info;
 
 extern seg_metrics_st        *seg_metrics;
 extern seg_perttl_metrics_st perttl[MAX_N_TTL_BUCKET];
-
+// 由于原本的策略偏简单的，所以eviction策略可以修改
 char *eviction_policy_names[] = {
     "None",
     "Random",

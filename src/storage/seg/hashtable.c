@@ -192,13 +192,16 @@ _info_to_item(uint64_t item_info)
 
 static inline void
 _item_free(uint64_t item_info, bool mark_tombstone)
-{
+{  
+    //add by yemaoxin,2023-09-18 20:21:04 从hashtable的item_info中搜索
     struct item *it;
     uint64_t    seg_id = GET_SEG_ID(item_info);
     uint64_t    offset = GET_OFFSET(item_info);
+
+    //add by yemaoxin,2023-09-18 20:22:07 居然是通过直接分配一个巨大的heap空间，对heap空间做切分
     it = (struct item *) (heap.base + heap.seg_size * seg_id + offset);
     uint32_t sz = item_ntotal(it);
-
+    //add by yemaoxin,2023-09-18 20:24:12 fetch-sub，先取后减
     __atomic_fetch_sub(&heap.segs[seg_id].live_bytes, sz, __ATOMIC_RELAXED);
     __atomic_fetch_sub(&heap.segs[seg_id].n_live_item, 1, __ATOMIC_RELAXED);
 
@@ -214,13 +217,15 @@ _item_free(uint64_t item_info, bool mark_tombstone)
 //        it->deleted = true;
 //    }
     /* let's always mark the tombstone */
+    //add by yemaoxin,2023-09-18 20:29:09 修改标记位删除
     it->deleted = true;
 }
 
 static inline bool
 _same_item(const char *key, uint32_t klen, uint64_t item_info)
-{
+{   //add by yemaoxin,2023-09-18 20:30:14 通过hash中的item——info，计算实际的item的地址，获取该item
     struct item *oit = _info_to_item(item_info);
+    //add by yemaoxin,2023-09-18 20:30:53 需要做内存中的string比较，这里是需要访问介质的
     return ((oit->klen == klen) && cc_memcmp(item_key(oit), key, klen) == 0);
 }
 
@@ -368,6 +373,7 @@ hashtable_put(struct item *it, const uint64_t seg_id, const uint64_t offset)
             }
 
             item_info = __atomic_load_n(&bkt[i], __ATOMIC_RELAXED);
+            // 先利用tag减少了到heap中搜索和比较字符
             if (GET_TAG(item_info) != tag) {
                 if (insert_item_info != 0 && item_info == 0) {
                     /* store item info in the first empty slot */
@@ -441,9 +447,10 @@ hashtable_delete(const struct bstring *key)
 
     uint64_t hv        = CAL_HV(key->data, key->len);
     uint64_t tag       = CAL_TAG_FROM_HV(hv);
+    //add by yemaoxin,2023-09-18 20:19:46 不对劲，这里应该是hashtable的bucket
     uint64_t *head_bkt = GET_BUCKET(hv);
     uint64_t *bkt      = head_bkt;
-
+    //add by yemaoxin,2023-09-18 20:16:02 在store部分数据搜索，bucket链中搜索item
     lock(head_bkt);
 
     int bkt_chain_len = GET_BUCKET_CHAIN_LEN(head_bkt) - 1;
@@ -585,6 +592,7 @@ hashtable_get(const char *key, const uint32_t klen,
 
     uint64_t    hv         = CAL_HV(key, klen);
     uint64_t    tag        = CAL_TAG_FROM_HV(hv);
+    // 找到自己的哈希桶链中的第一个位置bucket 
     uint64_t    *first_bkt = GET_BUCKET(hv);
     uint64_t    *bkt       = first_bkt;
     uint64_t    offset;
@@ -640,6 +648,7 @@ hashtable_get(const char *key, const uint32_t klen,
             }
 
             item_info = __atomic_load_n(&bkt[i], __ATOMIC_RELAXED);
+            // 从item info中通过tag的比较，减少了对Segmemt的读取和key的比较过程，确实是比较有效的一个操作
             if (GET_TAG(item_info) != tag) {
                 continue;
             }
@@ -675,6 +684,7 @@ hashtable_get(const char *key, const uint32_t klen,
             }
 
             offset = GET_OFFSET(item_info);
+            // 这个位置是直接计算出来的，并不需要在seg遍历，但是在CXL中使用Seg机制是不合理的，极大的增加读延迟增加了搜索DRAM中的哈希桶链的成本，而且在桶链中搜索也是再读CXL的
             it = (struct item *) (heap.base + heap.seg_size * GET_SEG_ID(item_info) + offset);
 
             /* item found, try to update the frequency */

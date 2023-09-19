@@ -1,3 +1,4 @@
+//add by yemaoxin,2023-09-18 20:49:13 按照bench_storage设计storage seg部分的代码
 #include <bench_storage.h>
 
 #include <storage/seg/item.h>
@@ -53,7 +54,7 @@ bench_storage_deinit(void)
     return CC_OK;
 }
 
-
+//add by yemaoxin,2023-09-18 20:46:48 item_get来访问segcache中的数据，似乎没有看到pelikan的架构
 rstatus_i
 bench_storage_get(struct benchmark_entry *e)
 {

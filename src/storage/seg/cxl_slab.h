@@ -10,6 +10,7 @@
 #include <cc_option.h>
 #include <cc_util.h>
 
+#include <numa.h>
 #include <stdbool.h>
 #include <stddef.h>
 
@@ -37,6 +38,7 @@
 #define EVICT_NONE    0 /* throw OOM, no eviction */
 #define EVICT_RS      1 /* random slab eviction */
 #define EVICT_CS      2 /* lrc (least recently created) slab eviction */
+#define EVICT_SLRU    3 /* 使用简化的SLRU机制进行evict */
 #define EVICT_INVALID 4 /* go no further! */
 
 /* The defaults here are placeholder values for now */
@@ -148,7 +150,7 @@ TAILQ_HEAD(slab_tqh, slab);
 
 #define SLAB_HDR_SIZE    offsetof(struct slab, data)
 
-extern struct cxl_hash_table *hash_table;
+extern struct cxl_hash_table *cxl_hash_table;
 extern size_t slab_size;
 extern slab_metrics_st *slab_metrics;
 cc_declare_itt_function(extern, slab_malloc);

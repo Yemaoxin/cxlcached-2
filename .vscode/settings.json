@@ -1,6 +1,8 @@
 {
     "files.associations": {
         "cc_mm.h": "c",
-        "cxl_slab.h": "c"
+        "cxl_slab.h": "c",
+        "cxl_item.h": "c",
+        "pthread.h": "c"
     }
 }

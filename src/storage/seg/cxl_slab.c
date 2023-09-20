@@ -1,11 +1,10 @@
 #include "cxl_slab.h"
-
 #include "cxl_hash.h"
 #include "cxl_item.h"
 #include <datapool/datapool.h>
 #include <cc_mm.h>
 #include <cc_util.h>
-
+#include <numa.h>
 #include <errno.h>
 #include <math.h>
 #include <stdlib.h>
@@ -16,12 +15,14 @@
 #define SLAB_ALIGN_DOWN(d, n)   ((d) - ((d) % (n)))
 #define TRIES_MAX               10
 
+//add by yemaoxin,2023-09-19 21:53:07 跟原有的LRU机制不一样，可以看到有一个简单的的slab_lruq
 struct slab_heapinfo {
     uint8_t         *base;       /* prealloc base */
     uint8_t         *curr;       /* prealloc start */
     uint32_t        nslab;       /* # slab allocated */
     uint32_t        max_nslab;   /* max # slab allowed */
     struct slab     **slab_table;/* table of all slabs */
+    //add by yemaoxin,2023-09-20 10:24:13 这里是slab的队列，并不是slab内部的item队列
     struct slab_tqh slab_lruq;   /* lru slab q */
 };
 
@@ -35,9 +36,10 @@ static int pool_slab_state;                     /* data pool state */
 perslab_metrics_st perslab[SLABCLASS_MAX_ID];
 uint8_t profile_last_id; /* last id in slab profile */
 size_t slab_profile[SLABCLASS_MAX_ID + 1];        /* slab profile */
-
+// 为什么heapinfo只有一个
 static struct slab_heapinfo heapinfo;             /* info of all allocated slabs */
 struct slabclass slabclass[SLABCLASS_MAX_ID + 1]; /* collection of slabs bucketed by slabclass */
+
 
 size_t slab_size = SLAB_SIZE;           /* # bytes in a slab */
 static size_t slab_mem = SLAB_MEM;      /* maximum bytes allocated for slabs */
@@ -52,8 +54,8 @@ static char *slab_datapool = SLAB_DATAPOOL;   /* slab datapool path */
 static bool prefault = SLAB_PREFAULT;         /* slab datapool prefault option */
 static char *slab_datapool_name = SLAB_DATAPOOL_NAME;   /* slab datapool name */
 
-bool use_cas = SLAB_USE_CAS;
-struct cxl_hash_table *hash_table = NULL;
+bool cxl_use_cas = SLAB_USE_CAS;
+struct cxl_hash_table * cxl_hash_table = NULL;
 uint64_t cas_id;
 
 delta_time_i max_ttl = ITEM_MAX_TTL;
@@ -195,7 +197,7 @@ _slab_recreate_items(struct slab *slab)
             INCR(slab_metrics, item_curr);
             INCR(slab_metrics, item_alloc);
             PERSLAB_INCR(slab->id, item_curr);
-            item_relink(it);
+            cxl_item_relink(it);
             if (--p->nfree_item != 0) {
                 p->next_item_in_slab = (struct cxl_item *)((char *)p->next_item_in_slab + p->size);
             } else {
@@ -338,6 +340,7 @@ static rstatus_i
 _slab_heapinfo_setup(void)
 {
     heapinfo.nslab = 0;
+    // 按slab大小都是1m划分的
     heapinfo.max_nslab = slab_mem / slab_size;
 
     heapinfo.base = NULL;
@@ -555,7 +558,7 @@ slab_teardown(void)
         log_warn("%s has never been set up", SLAB_MODULE_NAME);
     }
 
-    hashtable_destroy(&hash_table);
+    cxl_hashtable_destroy(&cxl_hash_table);
     _slab_heapinfo_teardown();
     _slab_slabclass_teardown();
     slab_metrics = NULL;
@@ -592,15 +595,15 @@ slab_setup(slab_options_st *options, slab_metrics_st *metrics)
         item_max = option_uint(&options->slab_item_max);
         item_growth = option_fpn(&options->slab_item_growth);
         max_ttl = option_uint(&options->slab_item_max_ttl);
-        use_cas = option_bool(&options->slab_use_cas);
+        cxl_use_cas = option_bool(&options->slab_use_cas);
         hash_power = option_uint(&options->slab_hash_power);
         slab_datapool = option_str(&options->slab_datapool);
         slab_datapool_name = option_str(&options->slab_datapool_name);
         prefault = option_bool(&options->slab_datapool_prefault);
     }
 
-    hash_table = cxl_hashtable_create(hash_power);
-    if (hash_table == NULL) {
+    cxl_hash_table = cxl_hashtable_create(hash_power);
+    if (cxl_hash_table == NULL) {
         log_crit("Could not create hash table");
         goto error;
     }
@@ -648,6 +651,7 @@ _slab_hdr_init(struct slab *slab, uint8_t id)
     slab->refcount = 0;
 }
 
+//add by yemaoxin,2023-09-20 14:40:27 控制分配的heap内存总量
 static bool
 _slab_heap_full(void)
 {
@@ -665,7 +669,8 @@ _slab_heap_create(void)
         heapinfo.curr += slab_size;
     } else {
         //add by yemaoxin,2023-09-19 19:47:43 居然没有做一个容量上的限制
-        slab = cc_alloc(slab_size);
+        // slab = cc_alloc(slab_size);
+        slab = numa_alloc_onnode(slab_size,1);
     }
 
     return slab;
@@ -680,6 +685,7 @@ _slab_table_rand(void)
     return heapinfo.slab_table[rand_idx];
 }
 
+//add by yemaoxin,2023-09-20 10:20:23 不对劲，这里有LRUq
 static struct slab *
 _slab_lruq_head(void)
 {
@@ -756,7 +762,8 @@ _slab_evict_one(struct slab *slab)
 
         if (it->is_linked) {
             it->is_linked = 0;
-            cxl_hashtable_delete(cxl_item_key(it), it->klen, hash_table);
+            // 从hash拉链中删除
+            cxl_hashtable_delete(cxl_item_key(it), it->klen, cxl_hash_table);
         } else if (it->in_freeq) {
             ASSERT(slab == item_to_slab(it));
             ASSERT(!SLIST_EMPTY(&p->free_itemq));
@@ -781,6 +788,7 @@ _slab_evict_one(struct slab *slab)
  * are no deletes from the slab_table. These two constraints allows us to keep
  * our random choice uniform.
  */
+//add by yemaoxin,2023-09-20 10:34:06 修改原有的evict机制
 static struct slab *
 _slab_evict_rand(void)
 {
@@ -808,6 +816,7 @@ _slab_evict_rand(void)
 /*
  * Evict by looking into least recently used queue of all slabs.
  */
+//add by yemaoxin,2023-09-20 10:34:21 需要修改LRU机制
 static struct slab *
 _slab_evict_lru(int id)
 {
@@ -878,7 +887,11 @@ _slab_get(uint8_t id)
     ASSERT(slabclass[id].next_item_in_slab == NULL);
     ASSERT(SLIST_EMPTY(&slabclass[id].free_itemq));
 
+    //add by yemaoxin,2023-09-20 14:35:40 原有的机制很简单，即使用随机的方式或者简单的LRU机制进行驱逐，这样是极其不合理的
     slab = _slab_get_new();
+
+    // 可以理解成是防钙化问题上使用的简单的策略驱逐策略，或者说使用了简单的替换策略，这样就是很简单的策略
+    // 会导致什么具体的问题，将热数据驱逐？，这个是属于CXL上的，所以是不是不必担心
 
     if (slab == NULL && (evict_opt & EVICT_CS)) {
         slab = _slab_evict_lru(id);

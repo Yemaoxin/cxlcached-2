@@ -6,6 +6,7 @@
 #include "segevict.h"
 #include "ttlbucket.h"
 #include "datapool/datapool.h"
+#include "cxl_slab.h"
 
 #include <cc_mm.h>
 #include <cc_util.h>
@@ -40,6 +41,8 @@ bool use_cas = false;
 pthread_t bg_tid;
 int n_thread = 1;
 volatile bool stop = false;
+
+static slab_metrics_st cxl_metrics = { SLAB_METRIC(METRIC_INIT) };
 
 static char *seg_state_change_str[] = {
     "allocation",
@@ -769,7 +772,13 @@ void seg_setup(seg_options_st *options, seg_metrics_st *metrics)
     {
         heap.n_reserved_seg = n_thread;
     }
+    //add by yemaoxin,2023-09-20 17:36:26 slab的初始化
+    slab_options_st *slab_opts=cc_alloc(sizeof(slab_options_st ));
+    *slab_opts = (slab_options_st){SLAB_OPTION(OPTION_INIT)};
+    option_load_default(options, OPTION_CARDINALITY(slab_options_st));
 
+    slab_setup(slab_opts,&cxl_metrics);
+    //add by yemaoxin,2023-09-20 17:36:42 包括slab的cralwer线程等也可以在这里进行设置
     start_background_thread(NULL);
 
     seg_initialized = true;
@@ -780,6 +789,7 @@ void seg_setup(seg_options_st *options, seg_metrics_st *metrics)
     return;
 
 error:
+    slab_teardown();
     seg_teardown();
     exit(EX_CONFIG);
 }

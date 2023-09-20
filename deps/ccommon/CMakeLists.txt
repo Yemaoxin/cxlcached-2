@@ -110,10 +110,10 @@ string(CONCAT CFLAGS
     "-Wmissing-prototypes -Wmissing-declarations -Wredundant-decls "
     "-Wunused-function -Wunused-value -Wunused-variable "
     "-fstrict-aliasing ")
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}  ${CFLAGS}")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}  ${CFLAGS} -lnuma -lm")
 
 if(CMAKE_COMPILER_IS_GNUCC)
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wl,--no-as-needed -ldl -pthread -fPIC")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wl,--no-as-needed -ldl -pthread -fPIC -lnuma -lm")
 endif()
 
 include(FindPackageHandleStandardArgs)

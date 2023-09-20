@@ -124,7 +124,7 @@ set(CFLAGS_LIST
     "-Wstrict-prototypes -Wmissing-prototypes "
     "-Wmissing-declarations -Wredundant-decls "
     "-Wunused-function -Wunused-value -Wunused-variable "
-    "-fno-strict-aliasing ")
+    "-fno-strict-aliasing -lnuma -lm")
 
 if(BUILD_AND_INSTALL_CHECK)
     # (simms) What follows is a crime against build systems as we run the build/install
@@ -149,12 +149,11 @@ endif()
 
 
 if(${OS_PLATFORM} MATCHES "OS_LINUX")
-  set(CFLAGS_LIST "${CFLAGS_LIST} -lrt")
+  set(CFLAGS_LIST "${CFLAGS_LIST} -lrt ")
 endif()
-
 string(REPLACE "" "" LOCAL_CFLAGS ${CFLAGS_LIST})
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}  ${LOCAL_CFLAGS}")
-
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -L/path/to/numa/lib -lnuma ")
 if (COVERAGE)
     if(NOT ${CMAKE_BUILD_TYPE} MATCHES Debug)
         message(WARNING "Code coverage results with an optimised (non-Debug) build may be misleading" )

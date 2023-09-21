@@ -51,7 +51,7 @@
  * As mentioned above, the first array of head bucket only store 7 item info,
  * because the first slot store bucket info:
  * lock (8-bit) + bucket chain length (8-bit) + cas (32-bit) +
- * shared last access timestamp
+ * shared last access timestamp(16-bit)
  *
  * If the number of extra array is larger than zero,
  * then last slot is used to store pointer to the extra array.
@@ -73,7 +73,7 @@
  *      │      32-bit cas        │         │      12-bit tag      │
  *      │ 8-bit bucket chain len │         │  8-bit freq counter  │
  *      │      8-bit lock        │         │    24-bit seg id     │
- *      │    16-bit unused       │         │    20-bit offset     │
+ *      │    16-bit timestamp    │         │    20-bit offset     │
  *      └────────────────────────┘         └──────────────────────┘
  *
  *
@@ -155,7 +155,9 @@ hashtable_delete(const struct bstring *key);
 bool
 hashtable_evict(const char *oit_key, uint32_t oit_klen, uint64_t seg_id,
         uint64_t offset);
-
+bool
+hashtable_evict_to_cxl(const char *oit_key, uint32_t oit_klen, uint64_t seg_id,
+        uint64_t offset);
 struct item *
 hashtable_get(const char *key, uint32_t klen, int32_t *seg_id,
         uint64_t *cas);

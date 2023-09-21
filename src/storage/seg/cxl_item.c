@@ -77,7 +77,7 @@ cxl_item_hdr_init(struct cxl_item *it, uint32_t offset, uint8_t id)
     ASSERT(offset >= SLAB_HDR_SIZE && offset < slab_size);
 
 #if CC_ASSERT_PANIC == 1 || CC_ASSERT_LOG == 1
-    it->magic = ITEM_MAGIC;
+    it->magic = CXL_ITEM_MAGIC;
 #endif
     it->offset = offset;
     it->id = id;
@@ -103,7 +103,7 @@ _item_reset(struct cxl_item *it)
  *
  * On success we return the pointer to the allocated item.
  */
-static item_rstatus_e
+item_rstatus_e
 cxl_item_alloc(struct cxl_item **it_p, uint8_t klen, uint32_t vlen, uint8_t olen)
 {
     uint8_t id = slab_id(cxl_item_ntotal(klen, vlen, olen));
@@ -157,7 +157,7 @@ _item_dealloc(struct cxl_item **it_p)
 static void
 _item_link(struct cxl_item *it, bool relink)
 {
-    ASSERT(it->magic == ITEM_MAGIC);
+    ASSERT(it->magic == CXL_ITEM_MAGIC);
     ASSERT(!(it->in_freeq));
     ASSERT(it->prev==NULL&&it->next==NULL);
     if (!relink) {
@@ -209,7 +209,7 @@ cxl_item_insert(struct cxl_item *it, const struct bstring *key)
 static void
 _item_unlink(struct cxl_item *it)
 {
-    ASSERT(it->magic == ITEM_MAGIC);
+    ASSERT(it->magic == CXL_ITEM_MAGIC);
 
     log_verb("unlink it %p of id %"PRIu8" at offset %"PRIu32, it, it->id,
             it->offset);
@@ -265,8 +265,8 @@ cxl_item_get(const struct bstring *key,uint8_t read_flag)
 }
 
 /* TODO(yao): move this to memcache-specific location */
-static void
-_item_define(struct cxl_item *it, const struct bstring *key, const struct bstring
+ void
+cxl_item_define(struct cxl_item *it, const struct bstring *key, const struct bstring
         *val, uint8_t olen, proc_time_i expire_at)
 {
     proc_time_i expire_cap = time_delta2proc_sec(max_ttl);
@@ -297,7 +297,7 @@ cxl_item_reserve(struct cxl_item **it_p, const struct bstring *key, const struct
 
     it = *it_p;
 
-    _item_define(it, key, val, olen, expire_at);
+    cxl_item_define(it, key, val, olen, expire_at);
 
     log_verb("reserve it %p of id %"PRIu8" for key '%.*s' optional len %"PRIu8,
             it, it->id,key->len, key->data, olen);

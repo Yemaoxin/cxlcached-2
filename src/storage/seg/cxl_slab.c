@@ -46,10 +46,10 @@ static size_t slab_mem = SLAB_MEM;      /* maximum bytes allocated for slabs */
 static bool prealloc = SLAB_PREALLOC;   /* allocate slabs ahead of time? */
 static int evict_opt = SLAB_EVICT_OPT;  /* slab eviction policy */
 static bool use_freeq = SLAB_USE_FREEQ; /* use items in free queue? */
-static size_t item_min = ITEM_SIZE_MIN; /* min item size */
-static size_t item_max = ITEM_SIZE_MAX; /* max item size */
-static double item_growth = ITEM_FACTOR;/* item size growth factor */
-static uint32_t hash_power = HASH_POWER;/* power (of 2) entries for hashtable */
+static size_t item_min = CXL_ITEM_SIZE_MIN; /* min item size */
+static size_t item_max = CXL_ITEM_SIZE_MAX; /* max item size */
+static double item_growth = CXL_ITEM_FACTOR;/* item size growth factor */
+static uint32_t hash_power = CXL_HASH_POWER;/* power (of 2) entries for hashtable */
 static char *slab_datapool = SLAB_DATAPOOL;   /* slab datapool path */
 static bool prefault = SLAB_PREFAULT;         /* slab datapool prefault option */
 static char *slab_datapool_name = SLAB_DATAPOOL_NAME;   /* slab datapool name */
@@ -935,7 +935,7 @@ _slab_get_item_from_freeq(uint8_t id)
 
     it = SLIST_FIRST(&p->free_itemq);
 
-    ASSERT(it->magic == ITEM_MAGIC);
+    ASSERT(it->magic == CXL_ITEM_MAGIC);
     ASSERT(it->in_freeq);
     ASSERT(!(it->is_linked));
 

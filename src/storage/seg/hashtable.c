@@ -3,7 +3,7 @@
 #include "hashtable.h"
 #include "item.h"
 #include "seg.h"
-
+#include "cxl_item.h"
 #include <cc_mm.h>
 #define XXH_INLINE_ALL
 #include <hash/xxhash.h>
@@ -219,6 +219,53 @@ _item_free(uint64_t item_info, bool mark_tombstone)
     /* let's always mark the tombstone */
     //add by yemaoxin,2023-09-18 20:29:09 修改标记位删除
     it->deleted = true;
+}
+static inline void
+_item_free_move_to_cxl(uint64_t item_info, bool mark_tombstone)
+{  
+    //add by yemaoxin,2023-09-18 20:21:04 从hashtable的item_info中搜索
+    struct item *it;
+    uint64_t    seg_id = GET_SEG_ID(item_info);
+    uint64_t    offset = GET_OFFSET(item_info);
+
+    //add by yemaoxin,2023-09-18 20:22:07 居然是通过直接分配一个巨大的heap空间，对heap空间做切分
+    it = (struct item *) (heap.base + heap.seg_size * seg_id + offset);
+    uint32_t sz = item_ntotal(it);
+    //add by yemaoxin,2023-09-18 20:24:12 fetch-sub，先取后减
+    __atomic_fetch_sub(&heap.segs[seg_id].live_bytes, sz, __ATOMIC_RELAXED);
+    __atomic_fetch_sub(&heap.segs[seg_id].n_live_item, 1, __ATOMIC_RELAXED);
+
+#ifdef DEBUG_MODE
+    __atomic_fetch_add(&heap.segs[seg_id].n_rm_item, 1, __ATOMIC_RELAXED);
+    __atomic_fetch_add(&heap.segs[seg_id].n_rm_bytes, sz, __ATOMIC_RELAXED);
+#endif
+
+    ASSERT(__atomic_load_n(&heap.segs[seg_id].n_live_item, __ATOMIC_RELAXED) >= 0);
+    ASSERT(__atomic_load_n(&heap.segs[seg_id].live_bytes, __ATOMIC_RELAXED) >= 0);
+    /* let's always mark the tombstone */
+    //add by yemaoxin,2023-09-18 20:29:09 修改标记位删除
+    it->deleted = true;
+    
+    const struct  bstring key={.len=it->klen,.data=item_key(it)};
+    const struct  bstring val={.len=it->vlen,.data=item_val(it)};
+    proc_time_i create = &heap.segs[seg_id].create_at;
+    proc_time_i ttl= &heap.segs[seg_id].ttl;
+    proc_time_i now = (uint64_t) time_proc_sec();
+    delta_time_i used = now -create;
+    if(used>=ttl)
+    {
+        log_error("item expiration : TTL < Used time\n");
+    }
+    if(ttl -used <10)
+    {
+        log_info(" Low TTL item : Not move to CXL \n");
+        return ;
+    }
+    cxl_item** new_cxl_item_p;
+    // olen目前直接设置为0
+    cxl_item_alloc(new_cxl_item_p,it->klen,it->vlen,0);
+    cxl_item_define(*new_cxl_item_p,&key,&val,0,ttl-used);
+    cxl_item_insert(*new_cxl_item_p,item_key(it));
 }
 
 static inline bool
@@ -479,6 +526,7 @@ hashtable_delete(const struct bstring *key)
             /* if this is the first and most up-to-date hash table entry
              * we need to mark tombstone, this is for recovery */
             _item_free(item_info, !deleted);
+            // 就当是8位全置零
             __atomic_store_n(&bkt[i], 0, __ATOMIC_RELAXED);
 
             deleted = true;
@@ -580,7 +628,82 @@ hashtable_evict(const char *oit_key, const uint32_t oit_klen,
 
     return found_oit;
 }
+bool
+hashtable_evict_to_cxl(const char *oit_key, const uint32_t oit_klen,
+                const uint64_t seg_id, const uint64_t offset)
+{
+    INCR(seg_metrics, hash_evict);
 
+    uint64_t hv        = CAL_HV(oit_key, oit_klen);
+    uint64_t tag       = CAL_TAG_FROM_HV(hv);
+    uint64_t *head_bkt = GET_BUCKET(hv);
+    uint64_t *bkt      = head_bkt;
+
+    uint64_t item_info;
+    uint64_t oit_info  = _build_item_info(tag, seg_id, offset);
+
+    bool first_match = true, item_outdated = true, found_oit = false;
+
+    /* this is necessary, need more thoughts if we need to use
+     * opportunistic concurrency control and atomics, see hashtable_relink_it
+     * basically we need to make sure the slot we store into has not been
+     * updated since we check */
+    lock(head_bkt);
+
+    int bkt_chain_len = GET_BUCKET_CHAIN_LEN(head_bkt) - 1;
+    int n_item_slot;
+    do {
+        n_item_slot =
+            bkt_chain_len > 0 ?
+            N_SLOT_PER_BUCKET - 1 :
+            N_SLOT_PER_BUCKET;
+
+        for (int i = 0; i < n_item_slot; i++) {
+            if (bkt == head_bkt && i == 0) {
+                continue;
+            }
+
+            item_info = CLEAR_FREQ(bkt[i]);
+            if (GET_TAG(item_info) != tag) {
+                continue;
+            }
+            /* a potential hit */
+            if (!_same_item(oit_key, oit_klen, item_info)) {
+                INCR(seg_metrics, hash_tag_collision);
+                continue;
+            }
+
+            if (first_match) {
+                first_match = false;
+                if (oit_info == item_info) {
+                    /* item to evict is up-to-date */
+                    _item_free_move_to_cxl(item_info, false);
+                    // struct item* it =(struct item*)();
+                    // 不能之间的删除，这里需要移动到cxl中
+                    __atomic_store_n(&bkt[i], 0, __ATOMIC_RELAXED);
+                    item_outdated = false;
+                    found_oit     = true;
+                }
+            } else {
+                /* not first match, delete hash table entry,
+                 * mark tombstone only when oit is the most up-to-date entry */
+                if (item_info == oit_info) {
+                    ASSERT(found_oit == false);
+                    found_oit = true;
+                }
+
+                _item_free(bkt[i], !item_outdated);
+                __atomic_store_n(&bkt[i], 0, __ATOMIC_RELAXED);
+            }
+        }
+        bkt_chain_len -= 1;
+        bkt        = (uint64_t *) (bkt[N_SLOT_PER_BUCKET - 1]);
+    } while (bkt_chain_len >= 0);
+
+    unlock(head_bkt);
+
+    return found_oit;
+}
 
 #ifdef STORE_FREQ_IN_HASHTABLE
 struct item *
@@ -621,6 +744,7 @@ hashtable_get(const char *key, const uint32_t klen,
                         continue;
                     }
                     /* clear the indicator bit */
+                    // 实际上即基于滑动窗口的机制，由于时间戳的移位后的不等，说明了freq的衰减。此时需要用上衰减机制。所有item全部更新
                     __atomic_fetch_and(&bkt[i], CLEAR_FREQ_SMOOTH_MASK, __ATOMIC_RELAXED);
                 }
                 bkt_chain_len -= 1;

@@ -337,6 +337,7 @@ bool rm_all_item_on_seg(int32_t seg_id, enum seg_state_change reason)
         return false;
     }
 
+    // 可以直接通过偏移量计算得到
     uint8_t *seg_data = get_seg_data_start(seg_id);
     uint8_t *curr = seg_data;
     uint32_t offset = MIN(seg->write_offset, heap.seg_size) - ITEM_HDR_SIZE;
@@ -352,7 +353,7 @@ bool rm_all_item_on_seg(int32_t seg_id, enum seg_state_change reason)
     pthread_mutex_lock(&heap.mtx);
     rm_seg_from_ttl_bucket(seg_id);
     pthread_mutex_unlock(&heap.mtx);
-
+    //add by yemaoxin,2023-09-20 21:47:48 此处应该增加到CXL的机制
     while (curr - seg_data < offset)
     {
         /* check both offset and n_live_item is because when a segment is expiring
@@ -385,6 +386,8 @@ bool rm_all_item_on_seg(int32_t seg_id, enum seg_state_change reason)
         hashtable_evict(item_key(it), it->klen, seg->seg_id_non_decr,
                         curr - seg_data);
 #else
+        //add by yemaoxin,2023-09-21 11:46:30 需要新增或者说将这个替换掉；
+        //  1需要知道此item是否是最新的数据，只有最新数据才有被迁移的价值
         hashtable_evict(item_key(it), it->klen, seg->seg_id, curr - seg_data);
 #endif
 

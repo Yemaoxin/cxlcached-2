@@ -70,6 +70,7 @@ seg_evict(int32_t *evicted_seg_id)
 
     log_verb("evict segment %"PRId32, *evicted_seg_id);
 
+//add by yemaoxin,2023-09-20 21:42:34 直接整个做eviction的机制并不合理，可以再适当选择机制
     if (rm_all_item_on_seg(*evicted_seg_id, SEG_EVICTION)) {
         INCR(seg_metrics, seg_evict);
 
@@ -146,6 +147,7 @@ cmp_seg_util(const void *d1, const void *d2)
     return seg1->live_bytes - seg2->live_bytes;
 }
 
+//add by yemaoxin,2023-09-20 21:39:12 需要做一个排序的rank
 static inline void
 rank_seg(void)
 {

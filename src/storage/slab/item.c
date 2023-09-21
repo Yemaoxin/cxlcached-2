@@ -206,6 +206,7 @@ item_get(const struct bstring *key)
 }
 
 /* TODO(yao): move this to memcache-specific location */
+// 这个是实际上的数据拷贝的过程
 static void
 _item_define(struct item *it, const struct bstring *key, const struct bstring
         *val, uint8_t olen, proc_time_i expire_at)

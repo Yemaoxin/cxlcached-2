@@ -81,9 +81,9 @@ typedef struct cxl_item {
     char              end[1];        /* item data  */
 }cxl_item;
 
-#define ITEM_MAGIC      0xfeedface
-#define ITEM_HDR_SIZE   offsetof(struct cxl_item, end)
-#define ITEM_CAS_SIZE   sizeof(uint64_t)
+#define CXL_ITEM_MAGIC      0xfeedface
+#define CXL_ITEM_HDR_SIZE   offsetof(struct cxl_item, end)
+#define CXL_ITEM_CAS_SIZE   sizeof(uint64_t)
 
 #if __GNUC__ >= 4 && __GNUC_MINOR__ >= 2
 #pragma GCC diagnostic ignored "-Wstrict-aliasing"
@@ -120,7 +120,7 @@ item_get_cas(struct cxl_item *it)
 static inline void
 cxl_item_set_cas(struct cxl_item *it)
 {
-    ASSERT(it->magic == ITEM_MAGIC);
+    ASSERT(it->magic == CXL_ITEM_MAGIC);
 
     if (cxl_use_cas) {
         *((uint64_t *)it->end) = ++cas_id;
@@ -130,7 +130,7 @@ cxl_item_set_cas(struct cxl_item *it)
 static inline size_t
 item_cas_size(void)
 {
-    return cxl_use_cas * ITEM_CAS_SIZE;
+    return cxl_use_cas * CXL_ITEM_CAS_SIZE;
 }
 
 #if __GNUC__ >= 4 && __GNUC_MINOR__ >= 6
@@ -166,13 +166,13 @@ cxl_item_npayload(struct cxl_item *it)
 static inline size_t
 cxl_item_ntotal(uint8_t klen, uint32_t vlen, uint8_t olen)
 {
-    return ITEM_HDR_SIZE + item_cas_size() + olen + klen + vlen;
+    return CXL_ITEM_HDR_SIZE + item_cas_size() + olen + klen + vlen;
 }
 
 static inline size_t
 cxl_item_size(const struct cxl_item *it)
 {
-    ASSERT(it->magic == ITEM_MAGIC);
+    ASSERT(it->magic == CXL_ITEM_MAGIC);
 
     return cxl_item_ntotal(it->klen, it->vlen, it->olen);
 }
@@ -263,3 +263,9 @@ size_t cxl_item_expire(struct bstring *prefix);
 
 /* flush the cache */
 void cxl_item_flush(void);
+ item_rstatus_e
+cxl_item_alloc(struct cxl_item **it_p, uint8_t klen, uint32_t vlen, uint8_t olen);
+
+void
+cxl_item_define(struct cxl_item *it, const struct bstring *key, const struct bstring
+        *val, uint8_t olen, proc_time_i expire_at);
